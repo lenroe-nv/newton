@@ -114,7 +114,7 @@ class Example:
             allegro_hand.joint_target[i] = 0.0
 
         builder = newton.ModelBuilder()
-        builder.replicate(allegro_hand, self.num_worlds, spacing=(1, 1, 0))
+        builder.replicate(allegro_hand, self.num_worlds)
 
         builder.add_ground_plane()
 
@@ -130,7 +130,7 @@ class Example:
             solver="newton",
             integrator="implicitfast",
             njmax=200,
-            ncon_per_world=150,
+            nconmax=150,
             impratio=10.0,
             cone="elliptic",
             iterations=100,

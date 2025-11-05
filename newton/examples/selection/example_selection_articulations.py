@@ -111,12 +111,12 @@ class Example:
         scene = newton.ModelBuilder()
 
         scene.add_ground_plane()
-        scene.replicate(world, num_worlds=self.num_worlds, spacing=(4.0, 4.0, 0.0))
+        scene.replicate(world, num_worlds=self.num_worlds)
 
         # finalize model
         self.model = scene.finalize()
 
-        self.solver = newton.solvers.SolverMuJoCo(self.model, njmax=100, ncon_per_world=50)
+        self.solver = newton.solvers.SolverMuJoCo(self.model, njmax=100, nconmax=50)
 
         self.viewer = viewer
 
