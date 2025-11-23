@@ -125,7 +125,7 @@ def vertex_triangle_collision_detection_brute_force(
         u2 = pos[t2]
         u3 = pos[t3]
 
-        closest_p, bary, feature_type = triangle_closest_point(u1, u2, u3, v)
+        closest_p, _bary, _feature_type = triangle_closest_point(u1, u2, u3, v)
 
         dis = wp.length(closest_p - v)
 
@@ -170,7 +170,7 @@ def vertex_triangle_collision_detection_brute_force_no_triangle_buffers(
         u2 = pos[t2]
         u3 = pos[t3]
 
-        closest_p, bary, feature_type = triangle_closest_point(u1, u2, u3, v)
+        closest_p, _bary, _feature_type = triangle_closest_point(u1, u2, u3, v)
 
         dis = wp.length(closest_p - v)
 
@@ -216,7 +216,7 @@ def validate_vertex_collisions(
             u2 = pos[t2]
             u3 = pos[t3]
 
-            closest_p, bary, feature_type = triangle_closest_point(u1, u2, u3, v)
+            closest_p, _bary, _feature_type = triangle_closest_point(u1, u2, u3, v)
             dis = wp.length(closest_p - v)
             wp.expect_eq(dis < query_radius, True)
             wp.expect_eq(dis >= min_dis, True)
@@ -260,7 +260,7 @@ def validate_triangle_collisions(
         v_index = triangle_colliding_vertices[offset + col]
         v = pos[v_index]
 
-        closest_p, bary, feature_type = triangle_closest_point(u1, u2, u3, v)
+        closest_p, _bary, _feature_type = triangle_closest_point(u1, u2, u3, v)
         dis = wp.length(closest_p - v)
         wp.expect_eq(dis < query_radius, True)
         wp.expect_eq(dis >= min_dis, True)
@@ -808,5 +808,4 @@ add_function_test(TestCollision, "test_particle_collision", test_particle_collis
 add_function_test(TestCollision, "test_mesh_ground_collision_index", test_mesh_ground_collision_index, devices=devices)
 
 if __name__ == "__main__":
-    wp.clear_kernel_cache()
     unittest.main(verbosity=2, failfast=True)

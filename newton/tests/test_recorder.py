@@ -27,8 +27,6 @@ import newton.utils
 from newton._src.utils.recorder import RingBuffer
 from newton.tests.unittest_utils import add_function_test, get_test_devices
 
-wp.config.quiet = True
-
 
 class TestRecorder(unittest.TestCase):
     pass
@@ -404,8 +402,8 @@ add_function_test(
     "test_model_and_state_recorder_binary",
     test_model_and_state_recorder_binary,
     devices=devices,
+    check_output=False,  # Ignore "Please install 'psutil'" UserWarning
 )
 
 if __name__ == "__main__":
-    wp.clear_kernel_cache()
     unittest.main(verbosity=2)
