@@ -1928,6 +1928,7 @@ def solve_body_joints(
 @wp.func
 def compute_contact_constraint_delta(
     err: float,
+    derr: float,
     tf_a: wp.transform,
     tf_b: wp.transform,
     m_inv_a: float,
@@ -1938,6 +1939,8 @@ def compute_contact_constraint_delta(
     linear_b: wp.vec3,
     angular_a: wp.vec3,
     angular_b: wp.vec3,
+    alpha: float,
+    gamma: float,
     relaxation: float,
     dt: float,
 ) -> float:
@@ -1955,8 +1958,12 @@ def compute_contact_constraint_delta(
     denom += wp.dot(rot_angular_a, I_inv_a * rot_angular_a)
     denom += wp.dot(rot_angular_b, I_inv_b * rot_angular_b)
 
-    delta_lambda = -err
+    denom = (1.0 + gamma) * denom + alpha
+
+    # XPBD damping: delta_lambda = -(C + gamma * dC/dt) / ((1 + gamma) * w + alpha)
+    delta_lambda = -err - gamma * derr
     if denom > 0.0:
+        # Divide by dt to get velocity correction (accounted for in apply_body_deltas)
         delta_lambda /= dt * denom
 
     return delta_lambda * relaxation
@@ -2060,6 +2067,8 @@ def solve_body_contact_positions(
     contact_thickness1: wp.array(dtype=float),
     contact_shape0: wp.array(dtype=int),
     contact_shape1: wp.array(dtype=int),
+    shape_material_ke: wp.array(dtype=float),
+    shape_material_kd: wp.array(dtype=float),
     shape_material_mu: wp.array(dtype=float),
     shape_material_torsional_friction: wp.array(dtype=float),
     shape_material_rolling_friction: wp.array(dtype=float),
@@ -2117,7 +2126,9 @@ def solve_body_contact_positions(
     # body to world transform
     X_wb_a = wp.transform_identity()
     X_wb_b = wp.transform_identity()
-    # angular velocities
+    # linear and angular velocities
+    v_a = wp.vec3(0.0)
+    v_b = wp.vec3(0.0)
     omega_a = wp.vec3(0.0)
     omega_b = wp.vec3(0.0)
     # contact offset in body frame
@@ -2129,6 +2140,7 @@ def solve_body_contact_positions(
         com_a = body_com[body_a]
         m_inv_a = body_m_inv[body_a]
         I_inv_a = body_I_inv[body_a]
+        v_a = wp.spatial_top(body_qd[body_a])
         omega_a = wp.spatial_bottom(body_qd[body_a])
 
     if body_b >= 0:
@@ -2136,30 +2148,57 @@ def solve_body_contact_positions(
         com_b = body_com[body_b]
         m_inv_b = body_m_inv[body_b]
         I_inv_b = body_I_inv[body_b]
+        v_b = wp.spatial_top(body_qd[body_b])
         omega_b = wp.spatial_bottom(body_qd[body_b])
 
     # use average contact material properties
     mat_nonzero = 0
+    ke = 0.0
+    kd = 0.0
     mu = 0.0
     torsional_friction = 0.0
     rolling_friction = 0.0
     if shape_a >= 0:
         mat_nonzero += 1
+        ke += shape_material_ke[shape_a]
+        kd += shape_material_kd[shape_a]
         mu += shape_material_mu[shape_a]
         torsional_friction += shape_material_torsional_friction[shape_a]
         rolling_friction += shape_material_rolling_friction[shape_a]
     if shape_b >= 0:
         mat_nonzero += 1
+        ke += shape_material_ke[shape_b]
+        kd += shape_material_kd[shape_b]
         mu += shape_material_mu[shape_b]
         torsional_friction += shape_material_torsional_friction[shape_b]
         rolling_friction += shape_material_rolling_friction[shape_b]
     if mat_nonzero > 0:
+        ke /= float(mat_nonzero)
+        kd /= float(mat_nonzero)
         mu /= float(mat_nonzero)
         torsional_friction /= float(mat_nonzero)
         rolling_friction /= float(mat_nonzero)
 
+    # compute compliance from stiffness (XPBD damping)
+    # alpha = compliance/dt² = 1/(ke*dt²)
+    # gamma = compliance*damping/dt = kd/(ke*dt)
+    # Critical damping: kd = 2*sqrt(ke)
+    alpha = 0.0
+    gamma = 0.0
+    if ke > 0.0:
+        alpha = 1.0 / (ke * dt * dt)
+        gamma = kd / (ke * dt)
+
+    # vectors from COM to contact points
     r_a = bx_a - wp.transform_point(X_wb_a, com_a)
     r_b = bx_b - wp.transform_point(X_wb_b, com_b)
+
+    # compute derr (constraint velocity * dt) from current velocities
+    # v_contact = v_linear + omega × r
+    v_contact_a = v_a + wp.cross(omega_a, r_a)
+    v_contact_b = v_b + wp.cross(omega_b, r_b)
+    # derr = dC/dt * dt = n . (v_b - v_a) * dt
+    derr = wp.dot(n, v_contact_b - v_contact_a) * dt
 
     angular_a = -wp.cross(r_a, n)
     angular_b = wp.cross(r_b, n)
@@ -2171,7 +2210,7 @@ def solve_body_contact_positions(
             wp.atomic_add(contact_inv_weight, body_b, 1.0)
 
     lambda_n = compute_contact_constraint_delta(
-        d, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, -n, n, angular_a, angular_b, relaxation, dt
+        d, derr, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, -n, n, angular_a, angular_b, alpha, gamma, relaxation, dt
     )
 
     lin_delta_a = -n * lambda_n
@@ -2203,6 +2242,7 @@ def solve_body_contact_positions(
         if err > 0.0:
             lambda_fr = compute_contact_constraint_delta(
                 err,
+                0.0,
                 X_wb_a,
                 X_wb_b,
                 m_inv_a,
@@ -2213,6 +2253,8 @@ def solve_body_contact_positions(
                 perp,
                 angular_a,
                 angular_b,
+                0.0,
+                0.0,
                 relaxation,
                 dt,
             )
@@ -2234,7 +2276,7 @@ def solve_body_contact_positions(
         if wp.abs(err) > 0.0:
             lin = wp.vec3(0.0)
             lambda_torsion = compute_contact_constraint_delta(
-                err, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, lin, lin, -n, n, relaxation, dt
+                err, 0.0, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, lin, lin, -n, n, 0.0, 0.0, relaxation, dt
             )
 
             lambda_torsion = wp.clamp(lambda_torsion, -lambda_n * torsional_friction, lambda_n * torsional_friction)
@@ -2249,7 +2291,7 @@ def solve_body_contact_positions(
             lin = wp.vec3(0.0)
             roll_n = wp.normalize(delta_omega)
             lambda_roll = compute_contact_constraint_delta(
-                err, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, lin, lin, -roll_n, roll_n, relaxation, dt
+                err, 0.0, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, lin, lin, -roll_n, roll_n, 0.0, 0.0, relaxation, dt
             )
 
             lambda_roll = wp.max(lambda_roll, -lambda_n * rolling_friction)

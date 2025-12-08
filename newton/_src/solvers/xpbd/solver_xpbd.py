@@ -515,6 +515,8 @@ class SolverXPBD(SolverBase):
                                 contacts.rigid_contact_thickness1,
                                 contacts.rigid_contact_shape0,
                                 contacts.rigid_contact_shape1,
+                                model.shape_material_ke,
+                                model.shape_material_kd,
                                 model.shape_material_mu,
                                 model.shape_material_torsional_friction,
                                 model.shape_material_rolling_friction,
