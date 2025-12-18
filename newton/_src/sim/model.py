@@ -68,6 +68,8 @@ class ModelAttributeFrequency(IntEnum):
     """Attribute frequency follows the number of shapes (see :attr:`~newton.Model.shape_count`)."""
     ARTICULATION = 6
     """Attribute frequency follows the number of articulations (see :attr:`~newton.Model.articulation_count`)."""
+    EQUALITY_CONSTRAINT = 7
+    """Attribute frequency follows the number of equality constraints (see :attr:`~newton.Model.equality_constraint_count`)."""
 
 
 class AttributeNamespace:
@@ -228,9 +230,6 @@ class Model:
         """List of sparse SDF volume references for mesh shapes, shape [shape_count]. None for non-mesh shapes. Empty if there are no colliding meshes. Kept for reference counting."""
         self.shape_sdf_coarse_volume = []
         """List of coarse SDF volume references for mesh shapes, shape [shape_count]. None for non-mesh shapes. Empty if there are no colliding meshes. Kept for reference counting."""
-        self.mesh_mesh_collision_enabled = False
-        """Whether SDF-based mesh-mesh collision is enabled. Requires GPU device since wp.Volume only supports CUDA.
-        Controlled by the enable_mesh_sdf_collision parameter in ModelBuilder. Set during model finalization."""
 
         self.spring_indices = None
         """Particle spring indices, shape [spring_count*2], int."""
@@ -453,6 +452,11 @@ class Model:
         """Coloring of all particles for Gauss-Seidel iteration (see :class:`~newton.solvers.SolverVBD`). Each array contains indices of particles sharing the same color."""
         self.particle_colors = None
         """Color assignment for every particle."""
+
+        self.body_color_groups = []
+        """Coloring of all rigid bodies for Gauss-Seidel iteration (see :class:`~newton.solvers.SolverVBD`). Each array contains indices of bodies sharing the same color."""
+        self.body_colors = None
+        """Color assignment for every rigid body."""
 
         self.device = wp.get_device(device)
         """Device on which the Model was allocated."""
