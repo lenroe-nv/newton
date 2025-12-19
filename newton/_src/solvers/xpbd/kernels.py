@@ -1970,6 +1970,89 @@ def compute_contact_constraint_delta(
 
 
 @wp.func
+def compute_contact_constraint_delta_with_elastic(
+    err: float,
+    derr: float,
+    tf_a: wp.transform,
+    tf_b: wp.transform,
+    m_inv_a: float,
+    m_inv_b: float,
+    I_inv_a: wp.mat33,
+    I_inv_b: wp.mat33,
+    linear_a: wp.vec3,
+    linear_b: wp.vec3,
+    angular_a: wp.vec3,
+    angular_b: wp.vec3,
+    alpha: float,
+    gamma: float,
+    relaxation: float,
+    dt: float,
+):
+    """Returns (delta_lambda, delta_lambda_elastic) where elastic excludes damping."""
+    denom = 0.0
+    denom += wp.length_sq(linear_a) * m_inv_a
+    denom += wp.length_sq(linear_b) * m_inv_b
+
+    q1 = wp.transform_get_rotation(tf_a)
+    q2 = wp.transform_get_rotation(tf_b)
+
+    rot_angular_a = wp.quat_rotate_inv(q1, angular_a)
+    rot_angular_b = wp.quat_rotate_inv(q2, angular_b)
+
+    denom += wp.dot(rot_angular_a, I_inv_a * rot_angular_a)
+    denom += wp.dot(rot_angular_b, I_inv_b * rot_angular_b)
+
+    denom_full = (1.0 + gamma) * denom + alpha
+    denom_elastic = denom + alpha
+
+    delta_lambda = -err - gamma * derr
+    delta_lambda_elastic = -err
+
+    if denom_full > 0.0:
+        delta_lambda /= dt * denom_full
+    if denom_elastic > 0.0:
+        delta_lambda_elastic /= dt * denom_elastic
+
+    return delta_lambda * relaxation, delta_lambda_elastic * relaxation
+
+
+@wp.func
+def compute_rigid_constraint_delta(
+    err: float,
+    tf_a: wp.transform,
+    tf_b: wp.transform,
+    m_inv_a: float,
+    m_inv_b: float,
+    I_inv_a: wp.mat33,
+    I_inv_b: wp.mat33,
+    linear_a: wp.vec3,
+    linear_b: wp.vec3,
+    angular_a: wp.vec3,
+    angular_b: wp.vec3,
+    relaxation: float,
+    dt: float,
+) -> float:
+    denom = 0.0
+    denom += wp.length_sq(linear_a) * m_inv_a
+    denom += wp.length_sq(linear_b) * m_inv_b
+
+    q1 = wp.transform_get_rotation(tf_a)
+    q2 = wp.transform_get_rotation(tf_b)
+
+    rot_angular_a = wp.quat_rotate_inv(q1, angular_a)
+    rot_angular_b = wp.quat_rotate_inv(q2, angular_b)
+
+    denom += wp.dot(rot_angular_a, I_inv_a * rot_angular_a)
+    denom += wp.dot(rot_angular_b, I_inv_b * rot_angular_b)
+
+    delta_lambda = -err
+    if denom > 0.0:
+        delta_lambda /= dt * denom
+
+    return delta_lambda * relaxation
+
+
+@wp.func
 def compute_positional_correction(
     err: float,
     derr: float,
@@ -2182,7 +2265,6 @@ def solve_body_contact_positions(
     # compute compliance from stiffness (XPBD damping)
     # alpha = compliance/dt² = 1/(ke*dt²)
     # gamma = compliance*damping/dt = kd/(ke*dt)
-    # Critical damping: kd = 2*sqrt(ke)
     alpha = 0.0
     gamma = 0.0
     if ke > 0.0:
@@ -2194,7 +2276,7 @@ def solve_body_contact_positions(
     r_b = bx_b - wp.transform_point(X_wb_b, com_b)
 
     # compute derr (constraint velocity * dt) from current velocities
-    # v_contact = v_linear + omega × r
+    # v_contact = v_linear + omega x r
     v_contact_a = v_a + wp.cross(omega_a, r_a)
     v_contact_b = v_b + wp.cross(omega_b, r_b)
     # derr = dC/dt * dt = n . (v_b - v_a) * dt
@@ -2209,8 +2291,24 @@ def solve_body_contact_positions(
         if body_b >= 0:
             wp.atomic_add(contact_inv_weight, body_b, 1.0)
 
-    lambda_n = compute_contact_constraint_delta(
-        d, derr, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, -n, n, angular_a, angular_b, alpha, gamma, relaxation, dt
+    # compute normal impulse with damping and elastic-only (for Coulomb friction clamping)
+    lambda_n, lambda_n_elastic = compute_contact_constraint_delta_with_elastic(
+        d,
+        derr,
+        X_wb_a,
+        X_wb_b,
+        m_inv_a,
+        m_inv_b,
+        I_inv_a,
+        I_inv_b,
+        -n,
+        n,
+        angular_a,
+        angular_b,
+        alpha,
+        gamma,
+        relaxation,
+        dt,
     )
 
     lin_delta_a = -n * lambda_n
@@ -2240,9 +2338,8 @@ def solve_body_contact_positions(
         err = wp.length(friction_delta)
 
         if err > 0.0:
-            lambda_fr = compute_contact_constraint_delta(
+            lambda_fr = compute_rigid_constraint_delta(
                 err,
-                0.0,
                 X_wb_a,
                 X_wb_b,
                 m_inv_a,
@@ -2253,14 +2350,12 @@ def solve_body_contact_positions(
                 perp,
                 angular_a,
                 angular_b,
-                0.0,
-                0.0,
                 relaxation,
                 dt,
             )
 
             # limit friction based on incremental normal force, good approximation to limiting on total force
-            lambda_fr = wp.max(lambda_fr, -lambda_n * mu)
+            lambda_fr = wp.max(lambda_fr, -lambda_n_elastic * mu)
 
             lin_delta_a -= perp * lambda_fr
             lin_delta_b += perp * lambda_fr
@@ -2275,11 +2370,13 @@ def solve_body_contact_positions(
 
         if wp.abs(err) > 0.0:
             lin = wp.vec3(0.0)
-            lambda_torsion = compute_contact_constraint_delta(
-                err, 0.0, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, lin, lin, -n, n, 0.0, 0.0, relaxation, dt
+            lambda_torsion = compute_rigid_constraint_delta(
+                err, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, lin, lin, -n, n, relaxation, dt
             )
 
-            lambda_torsion = wp.clamp(lambda_torsion, -lambda_n * torsional_friction, lambda_n * torsional_friction)
+            lambda_torsion = wp.clamp(
+                lambda_torsion, -lambda_n_elastic * torsional_friction, lambda_n_elastic * torsional_friction
+            )
 
             ang_delta_a -= n * lambda_torsion
             ang_delta_b += n * lambda_torsion
@@ -2290,11 +2387,11 @@ def solve_body_contact_positions(
         if err > 0.0:
             lin = wp.vec3(0.0)
             roll_n = wp.normalize(delta_omega)
-            lambda_roll = compute_contact_constraint_delta(
-                err, 0.0, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, lin, lin, -roll_n, roll_n, 0.0, 0.0, relaxation, dt
+            lambda_roll = compute_rigid_constraint_delta(
+                err, X_wb_a, X_wb_b, m_inv_a, m_inv_b, I_inv_a, I_inv_b, lin, lin, -roll_n, roll_n, relaxation, dt
             )
 
-            lambda_roll = wp.max(lambda_roll, -lambda_n * rolling_friction)
+            lambda_roll = wp.max(lambda_roll, -lambda_n_elastic * rolling_friction)
 
             ang_delta_a -= roll_n * lambda_roll
             ang_delta_b += roll_n * lambda_roll
